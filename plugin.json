@@ -4,7 +4,7 @@
   "flags": ["root"],
   "api_version": 1,
   "publish": {
-    "tags": ["bluetooth", "controller"],
+    "tags": ["bluetooth", "controller", "root"],
     "description": "Pair PS3 controllers by cable in Game Mode and keep them paired across SteamOS updates.",
     "image": ""
   }
