@@ -13,6 +13,16 @@ The interface follows the Steam language (English and Italian).
 - **Charging on the LEDs** while the cable is plugged in.
 - **Battery info**: usage time since the last full charge and for the previous cycle, to spot a worn battery.
 
+## Install
+
+PS3 Pair is not in the Decky plugin store: it is installed manually from a release zip.
+
+1. In Decky, open **Settings → General** and turn on **Developer mode**.
+2. Open the new **Developer** tab and use **Install Plugin from ZIP File** (or **Install Plugin from URL** with the link of the zip in the [Releases](../../releases) page).
+3. Open the plugin from the Decky menu. On the first start it enables the restore service on its own.
+
+To update, install the newer zip the same way. To uninstall, remove the plugin from Decky's settings: at the next boot the restore service disables itself.
+
 ## First connection of a new controller
 
 A DS3 cannot be discovered over Bluetooth: it only connects to the address stored inside it, and that address can only be written over USB. The cable is needed **once** per controller.
