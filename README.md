@@ -51,8 +51,8 @@ While charging, a DS3 does not report its level, so the bar only means "charging
 ## Build and install
 
 ```sh
-npm install
-npm run build
+pnpm install
+pnpm run build
 sudo ./install.sh        # copies to ~/homebrew/plugins/decky-ps3-pair and restarts Decky
 ```
 

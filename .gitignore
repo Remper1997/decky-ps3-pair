@@ -1,3 +1,6 @@
 node_modules/
-dist/*.map
+dist/
 __pycache__/
+.pnpm-store/
+out/
+*.log
