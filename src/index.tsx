@@ -94,6 +94,38 @@ function BatteryInfoModal({ d, closeModal }: { d: Device; closeModal?: () => voi
   );
 }
 
+function GuideModal({ closeModal }: { closeModal?: () => void }) {
+  return (
+    <ModalRoot closeModal={closeModal}>
+      <div className={staticClasses.Title} style={{ marginBottom: 8 }}>
+        {t.guideFirstTitle}
+      </div>
+      <ol style={{ marginTop: 0, paddingLeft: 20 }}>
+        {t.guideFirstSteps.map((step, i) => (
+          <li key={i} style={{ marginBottom: 4 }}>
+            {step}
+          </li>
+        ))}
+      </ol>
+      <p style={{ opacity: 0.7, fontSize: "0.9em" }}>{t.guideFirstNote}</p>
+      <div className={staticClasses.Title} style={{ margin: "16px 0 8px" }}>
+        {t.guideLedsTitle}
+      </div>
+      {t.guideLeds.map(([pattern, meaning], i) => (
+        <div key={i} style={{ marginBottom: 6 }}>
+          <b>{pattern}</b>
+          <br />
+          <span style={{ opacity: 0.85 }}>{meaning}</span>
+        </div>
+      ))}
+      <p style={{ opacity: 0.7, fontSize: "0.9em" }}>{t.guideLedsNote}</p>
+      <DialogButton style={{ marginTop: 12 }} onClick={() => closeModal?.()}>
+        {t.close}
+      </DialogButton>
+    </ModalRoot>
+  );
+}
+
 function RenameModal({ d, closeModal, onDone }: { d: Device; closeModal?: () => void; onDone: () => void }) {
   const [name, setNameState] = useState(d.alias);
   const save = async () => {
@@ -200,6 +232,11 @@ function Content() {
             />
           </PanelSectionRow>
         )}
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={() => showModal(<GuideModal />)}>
+            {t.guide}
+          </ButtonItem>
+        </PanelSectionRow>
       </PanelSection>
 
       <PanelSection title={t.secUpdates}>

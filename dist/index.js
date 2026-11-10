@@ -85,7 +85,7 @@ function FaPlaystation (props) {
   return GenIcon({"attr":{"viewBox":"0 0 576 512"},"child":[{"tag":"path","attr":{"d":"M570.9 372.3c-11.3 14.2-38.8 24.3-38.8 24.3L327 470.2v-54.3l150.9-53.8c17.1-6.1 19.8-14.8 5.8-19.4-13.9-4.6-39.1-3.3-56.2 2.9L327 381.1v-56.4c23.2-7.8 47.1-13.6 75.7-16.8 40.9-4.5 90.9.6 130.2 15.5 44.2 14 49.2 34.7 38 48.9zm-224.4-92.5v-139c0-16.3-3-31.3-18.3-35.6-11.7-3.8-19 7.1-19 23.4v347.9l-93.8-29.8V32c39.9 7.4 98 24.9 129.2 35.4C424.1 94.7 451 128.7 451 205.2c0 74.5-46 102.8-104.5 74.6zM43.2 410.2c-45.4-12.8-53-39.5-32.3-54.8 19.1-14.2 51.7-24.9 51.7-24.9l134.5-47.8v54.5l-96.8 34.6c-17.1 6.1-19.7 14.8-5.8 19.4 13.9 4.6 39.1 3.3 56.2-2.9l46.4-16.9v48.8c-51.6 9.3-101.4 7.3-153.9-10z"},"child":[]}]})(props);
 }
 
-// Testi dell'interfaccia: italiano se Steam è in italiano, altrimenti inglese.
+// UI strings: Italian when Steam is in Italian, English otherwise.
 const it = {
     player: (n) => `PS3 · giocatore ${n}`,
     connected: (a) => `Connesso · ${a}`,
@@ -126,6 +126,26 @@ const it = {
     secOptions: "Opzioni",
     combo: "Batteria con SELECT + START",
     comboDesc: "Tieni premuti SELECT e START per 1,5 s: i LED del pad mostrano la carica (1–4).",
+    guide: "Guida: prima connessione e LED",
+    guideFirstTitle: "Prima connessione di un nuovo PS3",
+    guideFirstSteps: [
+        "Accendi il Bluetooth del Deck.",
+        "Collega il PS3 al Deck con un cavo USB. In Modalità Gioco di solito Steam lo autorizza da solo; se il pad non si collega, premi «Accoppia PS3» e ricollegalo entro 60 secondi.",
+        "Aspetta qualche secondo, stacca il cavo e premi il tasto PS: il pad si collega via Bluetooth.",
+        "Da qui in poi basta premere PS, anche dopo gli aggiornamenti di SteamOS (con «Ricorda i PS3» attivo).",
+    ],
+    guideFirstNote: "Il cavo serve una sola volta. Un DS3 ricorda un solo dispositivo: se lo colleghi via cavo a una PS3 o a un altro PC, sul Deck andrà ricollegato col cavo.",
+    guideLedsTitle: "Cosa indicano i LED",
+    guideLeds: [
+        ["▮▯▯▯ fisso", "numero del giocatore (1–4)"],
+        ["spenti → barra che sale → 2 lampeggi → fissa", "batteria dopo SELECT + START: 1 LED fino al 25%, 2 fino al 50%, 3 fino al 75%, 4 fino al 100%"],
+        ["LED 1 lampeggia", "batteria sotto il 25%"],
+        ["barra che si riempie in loop (col cavo)", "in carica: il primo giro va da 0 a 4, poi riparte dall'ultimo livello noto"],
+        ["▮▮▮▮ fissi (col cavo)", "carica completa"],
+        ["lampeggio alternato veloce + vibrazione", "«Identifica» dal plugin"],
+        ["4 LED che lampeggiano insieme, pad non collegato", "il pad cerca il Deck: premi di nuovo PS o ricollegalo col cavo"],
+    ],
+    guideLedsNote: "In carica il DS3 non comunica il livello: la barra vuol dire solo «sta caricando». Il livello va a scatti di 25% e per un minuto dopo aver staccato il cavo può oscillare.",
     batteryInfo: "Info batteria",
     close: "Chiudi",
     hm: (h, m) => (h ? `${h} h ${m} min` : `${m} min`),
@@ -179,6 +199,26 @@ const en = {
     secOptions: "Options",
     combo: "Battery with SELECT + START",
     comboDesc: "Hold SELECT and START for 1.5 s: the pad LEDs show the charge (1–4).",
+    guide: "Guide: first connection and LEDs",
+    guideFirstTitle: "First connection of a new PS3",
+    guideFirstSteps: [
+        "Turn the Deck's Bluetooth on.",
+        "Plug the PS3 into the Deck with a USB cable. In Game Mode Steam usually authorizes it on its own; if the pad does not connect, press “Pair PS3” and plug it in again within 60 seconds.",
+        "Wait a few seconds, unplug the cable and press the PS button: the pad connects over Bluetooth.",
+        "From now on just press PS, even after SteamOS updates (with “Remember PS3 controllers” on).",
+    ],
+    guideFirstNote: "The cable is needed only once. A DS3 remembers a single host: if you plug it into a PS3 or another PC, it will need the cable on the Deck again.",
+    guideLedsTitle: "What the LEDs mean",
+    guideLeds: [
+        ["▮▯▯▯ steady", "player number (1–4)"],
+        ["off → bar fills → 2 blinks → steady", "battery after SELECT + START: 1 LED up to 25%, 2 up to 50%, 3 up to 75%, 4 up to 100%"],
+        ["LED 1 blinking", "battery below 25%"],
+        ["bar filling in a loop (cable in)", "charging: the first round goes 0 to 4, then it starts from the last known level"],
+        ["▮▮▮▮ steady (cable in)", "fully charged"],
+        ["fast alternating blink + rumble", "“Identify” from the plugin"],
+        ["all 4 blinking together, pad not connected", "the pad is looking for the Deck: press PS again or plug the cable in"],
+    ],
+    guideLedsNote: "While charging the DS3 does not report its level: the bar only means “charging”. The level has 25% steps and may bounce for a minute after unplugging.",
     batteryInfo: "Battery info",
     close: "Close",
     hm: (h, m) => (h ? `${h} h ${m} min` : `${m} min`),
@@ -200,7 +240,7 @@ function steamLanguage() {
             return loc.toLowerCase();
     }
     catch {
-        /* ignora */
+        /* ignore */
     }
     return (navigator.language || "en").toLowerCase();
 }
@@ -213,9 +253,9 @@ async function initLanguage() {
             lang = s.toLowerCase();
     }
     catch {
-        /* ignora */
+        /* ignore */
     }
-    t = lang.startsWith("it") ? it : en; // "italian" (Steam) o "it-IT" (browser)
+    t = lang.startsWith("it") ? it : en; // "italian" (Steam) or "it-IT" (browser)
 }
 initLanguage();
 
@@ -264,6 +304,19 @@ function BatteryInfoModal({ d, closeModal }) {
         window.SP_REACT.createElement("p", null, st.full_at && st.use_s !== null ? t.cycleNow(when(st.full_at), dur(st.use_s)) : t.cycleNone),
         st.last_cycle && window.SP_REACT.createElement("p", null, t.cycleLast(dur(st.last_cycle.use_s), pct(st.last_cycle.to_level))),
         window.SP_REACT.createElement("p", { style: { opacity: 0.7, fontSize: "0.9em" } }, t.cycleNote),
+        window.SP_REACT.createElement(DFL.DialogButton, { style: { marginTop: 12 }, onClick: () => closeModal?.() }, t.close)));
+}
+function GuideModal({ closeModal }) {
+    return (window.SP_REACT.createElement(DFL.ModalRoot, { closeModal: closeModal },
+        window.SP_REACT.createElement("div", { className: DFL.staticClasses.Title, style: { marginBottom: 8 } }, t.guideFirstTitle),
+        window.SP_REACT.createElement("ol", { style: { marginTop: 0, paddingLeft: 20 } }, t.guideFirstSteps.map((step, i) => (window.SP_REACT.createElement("li", { key: i, style: { marginBottom: 4 } }, step)))),
+        window.SP_REACT.createElement("p", { style: { opacity: 0.7, fontSize: "0.9em" } }, t.guideFirstNote),
+        window.SP_REACT.createElement("div", { className: DFL.staticClasses.Title, style: { margin: "16px 0 8px" } }, t.guideLedsTitle),
+        t.guideLeds.map(([pattern, meaning], i) => (window.SP_REACT.createElement("div", { key: i, style: { marginBottom: 6 } },
+            window.SP_REACT.createElement("b", null, pattern),
+            window.SP_REACT.createElement("br", null),
+            window.SP_REACT.createElement("span", { style: { opacity: 0.85 } }, meaning)))),
+        window.SP_REACT.createElement("p", { style: { opacity: 0.7, fontSize: "0.9em" } }, t.guideLedsNote),
         window.SP_REACT.createElement(DFL.DialogButton, { style: { marginTop: 12 }, onClick: () => closeModal?.() }, t.close)));
 }
 function RenameModal({ d, closeModal, onDone }) {
@@ -342,7 +395,9 @@ function Content() {
             window.SP_REACT.createElement(DFL.PanelSectionRow, null,
                 window.SP_REACT.createElement(DFL.ButtonItem, { layout: "below", onClick: onPair }, left > 0 ? t.waiting(left) : t.pairButton)),
             left > 0 && (window.SP_REACT.createElement(DFL.PanelSectionRow, null,
-                window.SP_REACT.createElement(DFL.Field, { label: t.plugNow, description: t.plugNowDesc, bottomSeparator: "none" })))),
+                window.SP_REACT.createElement(DFL.Field, { label: t.plugNow, description: t.plugNowDesc, bottomSeparator: "none" }))),
+            window.SP_REACT.createElement(DFL.PanelSectionRow, null,
+                window.SP_REACT.createElement(DFL.ButtonItem, { layout: "below", onClick: () => DFL.showModal(window.SP_REACT.createElement(GuideModal, null)) }, t.guide))),
         window.SP_REACT.createElement(DFL.PanelSection, { title: t.secUpdates },
             window.SP_REACT.createElement(DFL.PanelSectionRow, null,
                 window.SP_REACT.createElement(DFL.ToggleField, { label: t.persist, description: t.persistDesc, checked: persist, disabled: busy, onChange: onPersist })),

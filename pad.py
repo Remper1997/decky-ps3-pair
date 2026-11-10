@@ -1,9 +1,10 @@
-"""Funzioni sul pad PS3 collegato: LED, vibrazione, batteria e combinazione di tasti.
+"""Features of a connected PS3 pad: LEDs, rumble, battery and button combo.
 
-Usa solo interfacce del kernel (driver hid-sony):
-  /sys/bus/hid/devices/<hid>/leds/*::sony1..4      LED giocatore
-  /sys/class/power_supply/sony_controller_battery_<mac>   batteria
-  /dev/input/eventN                                  tasti e vibrazione (force feedback)
+Uses kernel interfaces only (hid-sony driver):
+  /sys/bus/hid/devices/<hid>/leds/*::sony1..4             player LEDs
+  /sys/class/power_supply/sony_controller_battery_<mac>   battery
+  /dev/input/eventN                                       buttons and rumble (force feedback)
+  /dev/hidrawN                                            output report (all 4 LEDs at once)
 """
 
 import asyncio
@@ -20,25 +21,25 @@ EV_FF = 0x15
 FF_RUMBLE = 0x50
 BTN_SELECT = 314
 BTN_START = 315
-EVIOCSFF = 0x40304580  # _IOW('E', 0x80, struct ff_effect) con sizeof = 48
+EVIOCSFF = 0x40304580  # _IOW('E', 0x80, struct ff_effect), sizeof = 48
 EVIOCRMFF = 0x40044581  # _IOW('E', 0x81, int)
-INPUT_EVENT = struct.Struct("llHHi")  # timeval, type, code, value (24 byte su x86_64)
+INPUT_EVENT = struct.Struct("llHHi")  # timeval, type, code, value (24 bytes on x86_64)
 
 COMBO = {BTN_SELECT, BTN_START}
-BUSY = set()  # pad su cui un'animazione sta usando i LED
-ORIGINAL = {}  # cartella HID del pad -> LED del giocatore visti prima di ogni nostra animazione
-STATE_FILE = None  # impostato da main.py: livello e statistiche batteria di ogni pad, su file
-SETTLE = 60.0  # secondi dopo il distacco del cavo in cui le letture non contano (rimbalzo)
+BUSY = set()  # pads whose LEDs are used by an animation right now
+ORIGINAL = {}  # pad HID dir -> player LEDs seen before any of our animations
+STATE_FILE = None  # set by main.py: battery level and statistics of each pad
+SETTLE = 60.0  # seconds after unplugging during which readings are ignored (bounce)
 _state = None  # addr -> {"level", "full_at", "use_s", "last_cycle"}
 _runtime = {}  # addr -> {"prev", "settle_until", "last_t", "charged"}
 _saved_at = 0.0
-COMBO_HOLD = 1.5  # secondi
-BATTERY_SHOW = 4.0  # secondi (animazione di carica / batteria scarica)
-BATTERY_HOLD = 3.0  # secondi a livello fisso
+COMBO_HOLD = 1.5  # seconds
+BATTERY_SHOW = 4.0  # seconds (charging animation / low battery blink)
+BATTERY_HOLD = 3.0  # seconds showing the steady level
 
 
 def hid_dirs(addr):
-    """Cartelle HID del kernel per il pad con questo indirizzo."""
+    """Kernel HID dirs of the pad with this address."""
     out = []
     for d in glob.glob("/sys/bus/hid/devices/*:054C:0268.*"):
         try:
@@ -51,7 +52,7 @@ def hid_dirs(addr):
 
 
 def connected_addresses():
-    """Indirizzi dei PS3 collegati adesso (Bluetooth o USB)."""
+    """Addresses of the PS3 pads connected right now (Bluetooth or USB)."""
     out = []
     for d in glob.glob("/sys/bus/hid/devices/*:054C:0268.*"):
         try:
@@ -81,8 +82,8 @@ def read_leds(paths):
 
 
 def _sixaxis_report(leds):
-    """Report di output del DS3 (come sixaxis_output_report del driver hid-sony),
-    con i 4 LED in un colpo solo e la vibrazione ferma."""
+    """DS3 output report (same as sixaxis_output_report in hid-sony),
+    with all 4 LEDs at once and rumble off."""
     bitmap = 0
     for i, v in enumerate(leds):
         if int(v):
@@ -90,7 +91,7 @@ def _sixaxis_report(leds):
     led = bytes([0xFF, 0x27, 0x10, 0x00, 0x32])
     return (
         bytes([0x01])  # report id
-        + bytes([0x01, 0xFF, 0x00, 0xFF, 0x00])  # rumble: spenta
+        + bytes([0x01, 0xFF, 0x00, 0xFF, 0x00])  # rumble: off
         + bytes(4)
         + bytes([bitmap])
         + led * 4
@@ -99,7 +100,7 @@ def _sixaxis_report(leds):
 
 
 def _hidraw_for(paths):
-    """/dev/hidrawN dello stesso dispositivo HID dei LED."""
+    """/dev/hidrawN of the same HID device as the LEDs."""
     hid = os.path.dirname(os.path.dirname(os.path.dirname(paths[0])))
     nodes = glob.glob(os.path.join(hid, "hidraw", "hidraw*"))
     return "/dev/" + os.path.basename(nodes[0]) if nodes else None
@@ -111,8 +112,8 @@ def _hidiocsoutput(length):
 
 
 def write_leds_atomic(paths, vals):
-    """Manda i 4 LED con un solo SET_REPORT: si accendono/spengono insieme.
-    Non cambia lo stato dei LED nel driver (sysfs), che resta il numero giocatore."""
+    """Send the 4 LEDs in a single SET_REPORT so they switch together.
+    The driver's LED state (sysfs) is untouched and keeps the player number."""
     node = _hidraw_for(paths) if paths else None
     if not node:
         return False
@@ -141,14 +142,18 @@ def write_leds(paths, vals):
             pass
 
 
+def _hid_key(paths):
+    return os.path.dirname(os.path.dirname(os.path.dirname(paths[0])))  # .../hid/devices/<id>
+
+
 def begin_leds(addr):
-    """Prende i LED del pad per un'animazione. Ritorna i percorsi, o None se occupati.
-    I LED del giocatore vengono ricordati la prima volta e non riletti dopo,
-    così un'animazione interrotta non può diventare il nuovo "numero giocatore"."""
+    """Take the pad's LEDs for an animation. Returns the paths, or None if busy.
+    The player LEDs are remembered the first time and never re-read, so an
+    interrupted animation can never become the new "player number"."""
     paths = led_paths(addr)
     if not paths or addr in BUSY:
         return None
-    key = os.path.dirname(os.path.dirname(os.path.dirname(paths[0])))  # .../hid/devices/<id>
+    key = _hid_key(paths)
     if key not in ORIGINAL:
         ORIGINAL[key] = read_leds(paths)
     BUSY.add(addr)
@@ -156,14 +161,14 @@ def begin_leds(addr):
 
 
 def end_leds(addr, paths):
-    key = os.path.dirname(os.path.dirname(os.path.dirname(paths[0])))
+    key = _hid_key(paths)
     if key in ORIGINAL:
         write_leds(paths, ORIGINAL[key])
     BUSY.discard(addr)
 
 
 def restore_all():
-    """Rimette i LED del giocatore su tutti i pad toccati (chiusura del plugin)."""
+    """Put the player LEDs back on every pad we touched (plugin shutdown)."""
     for key, vals in ORIGINAL.items():
         leds = sorted(glob.glob(os.path.join(key, "leds", "*::sony[1-4]")))
         if len(leds) == 4:
@@ -172,18 +177,18 @@ def restore_all():
 
 
 def player_number(addr):
-    """Numero del LED acceso (1-4), None se non leggibile."""
+    """Number of the lit LED (1-4), None if unreadable."""
     try:
         vals = [int(v or 0) for v in read_leds(led_paths(addr))]
     except (OSError, ValueError):
         return None
     on = [i + 1 for i, v in enumerate(vals) if v > 0]
-    # 1-4: un LED solo; combinazioni diverse le mostriamo come somma (5 = 4+1, ...)
+    # 1-4: a single LED; other combinations are shown as their sum (5 = 4+1, ...)
     return sum(on) if on else None
 
 
 def battery(addr):
-    """{'capacity': 0-100, 'status': 'Discharging'|'Charging'|'Full'|...} o None."""
+    """{'capacity': 0-100, 'status': 'Discharging'|'Charging'|'Full'|...} or None."""
     b = "/sys/class/power_supply/sony_controller_battery_" + addr.lower()
     try:
         with open(os.path.join(b, "capacity")) as f:
@@ -239,7 +244,7 @@ def _set_level(addr, cap):
 
 
 def remember_level(addr, b):
-    """Livello letto con SELECT+START: conta solo a batteria assestata."""
+    """Level read with SELECT+START: only counts once the battery has settled."""
     if not b or b["status"] in ("Charging", "Full"):
         return
     rt = _runtime.get(addr.upper(), {})
@@ -249,10 +254,10 @@ def remember_level(addr, b):
 
 
 def track(addr, b):
-    """Chiamato di continuo per ogni pad collegato.
-    - ricorda l'ultimo livello a batteria assestata (SETTLE s dopo il cavo)
-    - ciclo: se dopo una carica il pad si assesta al 100% parte il conteggio
-      del tempo di utilizzo; alla carica successiva il ciclo viene archiviato."""
+    """Called continuously for every connected pad.
+    - remembers the last level once the battery has settled (SETTLE s after unplugging)
+    - cycle: if the pad settles at 100% after charging, usage time starts
+      counting; at the next charge the cycle is archived as the previous one."""
     if not b:
         return
     now = time.monotonic()
@@ -300,10 +305,10 @@ def battery_stats(addr):
 
 
 def charge_frame(addr, step):
-    """Fotogramma dell'animazione di carica.
-    Primo giro 0,1,2,3,4; dai giri successivi parte dall'ultimo livello noto
-    (es. livello 2: 2,3,4,2,3,4...). Con livello 4 alterna 3 e 4, per non
-    sembrare "carico". Senza livello noto: sempre 0..4."""
+    """Frame of the charging animation.
+    First round 0,1,2,3,4; later rounds start from the last known level
+    (e.g. level 2: 2,3,4,2,3,4...). With level 4 it alternates 3 and 4, so it
+    does not look like "full". Without a known level: always 0..4."""
     if step < 5:
         n = step
     else:
@@ -318,19 +323,19 @@ def charge_frame(addr, step):
 
 
 def battery_leds(cap):
-    """Barra di LED: 1-25% -> 1 LED, ... 76-100% -> 4 LED; 0 -> nessuno."""
+    """LED bar: 1-25% -> 1 LED, ... 76-100% -> 4 LEDs; 0 -> none."""
     n = 0 if cap <= 0 else min(4, (cap + 24) // 25)
     return [1 if i < n else 0 for i in range(4)]
 
 
 def event_node(addr):
-    """/dev/input/eventN del pad (non quello dei sensori di movimento)."""
+    """/dev/input/eventN of the pad (not the motion sensors one)."""
     nodes = event_nodes(addr)
     return nodes[-1] if nodes else None
 
 
 def event_nodes(addr):
-    """Tutti i nodi tasti del pad: col cavo ce n'è uno USB oltre a quello Bluetooth."""
+    """All button nodes of the pad (with a cable there may be a USB one too)."""
     out = []
     for d in hid_dirs(addr):
         for inp in glob.glob(os.path.join(d, "input", "input*")):
@@ -347,14 +352,14 @@ def event_nodes(addr):
 
 
 async def rumble(addr, ms=600, strong=0xC000, weak=0xC000):
-    """Fa vibrare il pad. False se il pad non ha un nodo input o non supporta la vibrazione."""
+    """Rumble the pad. False if it has no input node or no force feedback."""
     node = event_node(addr)
     if not node:
         return False
     fd = os.open(node, os.O_RDWR)
     try:
         # struct ff_effect: type, id, direction, trigger(button, interval),
-        # replay(length, delay), [pad], union { rumble(strong, weak) ... } -> 48 byte
+        # replay(length, delay), [pad], union { rumble(strong, weak) ... } -> 48 bytes
         eff = bytearray(struct.pack("<HhHHHHH2xHH28x", FF_RUMBLE, -1, 0, 0, 0, ms, 0, strong, weak))
         fcntl.ioctl(fd, EVIOCSFF, eff, True)
         eff_id = struct.unpack_from("<h", eff, 2)[0]
@@ -369,7 +374,7 @@ async def rumble(addr, ms=600, strong=0xC000, weak=0xC000):
 
 
 async def show_battery(addr):
-    """Mostra la batteria sui 4 LED per qualche secondo, poi rimette il numero giocatore."""
+    """Show the battery on the 4 LEDs for a few seconds, then restore the player number."""
     b = battery(addr)
     if not b:
         return False
@@ -378,10 +383,16 @@ async def show_battery(addr):
         return False
     remember_level(addr, b)
     level = sum(battery_leds(b["capacity"]))
+    # Right after unplugging the reading bounces up (e.g. 75% instead of 25%):
+    # during the settle time show the last settled level, if there is one.
+    rt = _runtime.get(addr.upper(), {})
+    saved = _load_state().get(addr.upper(), {}).get("level")
+    if b["status"] != "Charging" and saved and time.monotonic() < rt.get("settle_until", 0):
+        level = saved
     bar = lambda n: [1 if k < n else 0 for k in range(4)]
     try:
-        # partenza da tutti spenti, così non si confonde col LED del giocatore;
-        # poi la barra sale fino al livello (in carica il livello non è noto: si salta)
+        # start from all off, so it is not mistaken for the player LED;
+        # then the bar fills up to the level (skipped while charging: level unknown)
         if b["status"] != "Charging":
             write_leds(paths, bar(0))
             await asyncio.sleep(0.4)
@@ -389,21 +400,21 @@ async def show_battery(addr):
                 write_leds(paths, bar(n))
                 await asyncio.sleep(0.2)
         if b["status"] == "Charging":
-            # in carica il DS3 non comunica il livello (il driver dice sempre 100%):
-            # la barra si riempie da 0 a 4, in loop
+            # while charging the DS3 does not report its level (driver says 100%):
+            # the bar fills from 0 to 4, in a loop
             end = asyncio.get_event_loop().time() + BATTERY_SHOW
             step = 0
             while asyncio.get_event_loop().time() < end:
                 write_leds(paths, charge_frame(addr, step))
                 step += 1
                 await asyncio.sleep(0.6)
-        elif b["capacity"] < 25:
-            # quasi scarico: il primo LED lampeggia
+        elif level <= 1 and b["capacity"] < 25:
+            # almost empty: the first LED blinks
             for i in range(int(BATTERY_SHOW / 0.25)):
                 write_leds(paths, [1 - i % 2, 0, 0, 0])
                 await asyncio.sleep(0.25)
         else:
-            # livello raggiunto: 2 lampeggi tutti insieme, poi fisso
+            # level reached: 2 blinks all together, then steady
             for _ in range(2):
                 write_leds(paths, bar(0))
                 await asyncio.sleep(0.25)
@@ -416,9 +427,9 @@ async def show_battery(addr):
 
 
 class ChargeMonitor:
-    """Col cavo collegato mostra lo stato sui LED senza premere nulla:
-    in carica -> barra che si riempie in loop; carico -> 4 LED fissi.
-    Staccato il cavo rimette i LED del giocatore."""
+    """With the cable plugged in, shows the state on the LEDs with no button press:
+    charging -> bar filling in a loop; full -> 4 steady LEDs.
+    When unplugged, the player LEDs come back."""
 
     STEP = 0.6
 
@@ -446,14 +457,14 @@ class ChargeMonitor:
         st = self.state.pop(addr, None)
         if st:
             end_leds(addr, st["paths"])
-            self.log("carica: fine animazione su", addr)
+            self.log("charge: animation ended on", addr)
 
     async def _loop(self):
         while True:
             try:
                 self._tick()
             except Exception as e:
-                self.log("carica:", repr(e))
+                self.log("charge:", repr(e))
             await asyncio.sleep(self.STEP)
 
     def _tick(self):
@@ -477,11 +488,11 @@ class ChargeMonitor:
                     self._release(addr)
                 continue
             if st is None:
-                paths = begin_leds(addr)  # None se c'è già un'altra animazione
+                paths = begin_leds(addr)  # None if another animation is running
                 if not paths:
                     continue
                 st = self.state[addr] = {"mode": None, "paths": paths, "step": 0}
-                self.log("carica: cavo collegato su", addr, mode)
+                self.log("charge: cable plugged in on", addr, mode)
             paths = st["paths"]
             if mode != st["mode"]:
                 st["mode"] = mode
@@ -494,12 +505,12 @@ class ChargeMonitor:
 
 
 class ComboWatcher:
-    """Legge i tasti di ogni PS3 collegato; Select+Start tenuti premuti -> batteria sui LED."""
+    """Reads the buttons of every connected PS3; holding Select+Start -> battery on the LEDs."""
 
     def __init__(self, log):
         self.log = log
         self.enabled = True
-        self.watching = {}  # nodo /dev/input/eventN -> fd
+        self.watching = {}  # /dev/input/eventN node -> fd
         self.task = None
 
     def start(self):
@@ -540,17 +551,17 @@ class ComboWatcher:
         try:
             fd = os.open(node, os.O_RDONLY | os.O_NONBLOCK)
         except OSError as e:
-            self.log("combo: non posso aprire", node, repr(e))
+            self.log("combo: cannot open", node, repr(e))
             return
         self.watching[node] = fd
         state = {"held": set(), "timer": None, "busy": False}
-        self.log("combo: controllo i tasti di", addr, node)
+        self.log("combo: watching buttons of", addr, node)
 
         def fire():
             state["timer"] = None
             if self.enabled and not state["busy"]:
                 state["busy"] = True
-                self.log("combo: batteria richiesta su", addr, battery(addr))
+                self.log("combo: battery requested on", addr, battery(addr))
 
                 async def go():
                     try:
@@ -566,7 +577,7 @@ class ComboWatcher:
             except BlockingIOError:
                 return
             except OSError:
-                # pad scollegato
+                # pad disconnected
                 self._close(loop, node, fd)
                 return
             if not data:

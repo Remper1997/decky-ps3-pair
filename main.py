@@ -1,13 +1,17 @@
 """PS3 Pair - backend.
 
-Accoppia i controller PS3 (DualShock 3) via cavo in Modalità Gioco e,
-a richiesta, ne conserva il pairing tra un aggiornamento di SteamOS e l'altro.
+Pairs PS3 controllers (DualShock 3) over the USB cable and keeps their pairing
+across SteamOS updates.
 
-Come funziona l'accoppiamento: quando un DS3 viene collegato via USB il plugin
-"sixaxis" di BlueZ chiede all'agente Bluetooth predefinito di autorizzarlo.
-In Modalità Gioco nessuno risponde, quindi per una finestra di tempo limitata
-questo plugin registra un proprio agente come predefinito, autorizza solo i
-controller Sony e poi si deregistra (BlueZ torna all'agente precedente).
+How pairing works: when a DS3 is plugged in over USB, BlueZ's "sixaxis" plugin
+asks the default Bluetooth agent to authorize it. For a limited time window this
+plugin registers its own agent as the default one, authorizes Sony controllers
+only, then unregisters (BlueZ falls back to the previous agent).
+
+Why pairings get lost: SteamOS updates switch between A/B partitions, each with
+its own /var. The DS3 has no link key (cable pairing), so its BlueZ entry is not
+carried over. A systemd service restores the entries from a backup in /home
+before bluetooth.service starts.
 """
 
 import asyncio
@@ -28,7 +32,7 @@ from jeepney.low_level import HeaderFields  # noqa: E402
 from jeepney.wrappers import new_error, new_method_return, unwrap_msg  # noqa: E402
 
 BLUEZ = "org.bluez"
-AGENT_PATH = "/it/ps3pair/agent"
+AGENT_PATH = "/ps3pair/agent"
 SONY_VENDOR = "054c"
 BT_LIB = "/var/lib/bluetooth"
 
@@ -68,7 +72,7 @@ def _log(*a):
 
 
 def _read_info(path):
-    """Legge un file info di BlueZ in un dict piatto {chiave: valore} (solo [General])."""
+    """Read a BlueZ info file into a flat {key: value} dict ([General] only)."""
     out, section = {}, None
     try:
         with open(path) as f:
@@ -85,7 +89,7 @@ def _read_info(path):
 
 
 def _cable_devices():
-    """Voci in /var/lib/bluetooth con CablePairing=true -> {(adapter, addr): info}."""
+    """Entries in /var/lib/bluetooth with CablePairing=true -> {(adapter, addr): info}."""
     found = {}
     for info in glob.glob(os.path.join(BT_LIB, "*", "*", "info")):
         d = _read_info(info)
@@ -146,7 +150,7 @@ class Plugin:
         except Exception:
             return ""
 
-    # ---------- Agente ----------
+    # ---------- Agent ----------
 
     async def _handle_agent(self, msg):
         r = await self._bus()
@@ -160,14 +164,14 @@ class Plugin:
             ma = await self._modalias(dev_path)
             addr = dev_path.rsplit("dev_", 1)[-1].replace("_", ":")
             if ma.startswith("usb:v" + SONY_VENDOR):
-                _log("autorizzo controller Sony", addr, ma, uuid)
+                _log("authorizing Sony controller", addr, ma, uuid)
                 await r.send(new_method_return(msg))
                 self.paired_now.append(addr)
                 asyncio.get_event_loop().create_task(self._after_pair(addr, dev_path))
                 return
-            _log("rifiuto AuthorizeService non Sony", addr, ma)
+            _log("rejecting non-Sony AuthorizeService", addr, ma)
         else:
-            _log("rifiuto richiesta agente", member)
+            _log("rejecting agent request", member)
         await r.send(new_error(msg, "org.bluez.Error.Rejected"))
 
     async def _set_trusted(self, dev_path):
@@ -178,15 +182,15 @@ class Plugin:
         unwrap_msg(await r.send_and_get_reply(msg))
 
     async def _after_pair(self, addr, dev_path):
-        # Come fa KDE: marca il pad come fidato, così le riconnessioni via
-        # Bluetooth non richiedono un'altra autorizzazione all'agente.
+        # Like KDE does: mark the pad as trusted, so Bluetooth reconnections
+        # do not need another authorization from an agent.
         await asyncio.sleep(1)
         try:
             await self._set_trusted(dev_path)
-            _log("impostato Trusted", addr)
+            _log("set Trusted", addr)
         except Exception as e:
-            _log("Trusted fallito:", addr, repr(e))
-        # Lascia a BlueZ il tempo di scrivere il file info, poi aggiorna il backup.
+            _log("setting Trusted failed:", addr, repr(e))
+        # Give BlueZ time to write the info file, then refresh the backup.
         await asyncio.sleep(2)
         if await self.get_persist():
             await self._sync()
@@ -200,7 +204,7 @@ class Plugin:
             await self._call(*mgr, "RegisterAgent", "os", (AGENT_PATH, "NoInputNoOutput"))
             try:
                 await self._call(*mgr, "RequestDefaultAgent", "o", (AGENT_PATH,))
-                _log("agente attivo per", seconds, "s")
+                _log("agent active for", seconds, "s")
                 loop = asyncio.get_event_loop()
                 self.pairing_until = loop.time() + seconds
                 while True:
@@ -214,17 +218,17 @@ class Plugin:
                     try:
                         await self._handle_agent(m)
                     except Exception as e:
-                        _log("errore agente:", repr(e))
+                        _log("agent error:", repr(e))
             finally:
                 self.pairing_until = 0.0
                 try:
                     await self._call(*mgr, "UnregisterAgent", "o", (AGENT_PATH,))
                 except Exception as e:
                     _log("UnregisterAgent:", repr(e))
-                _log("agente rimosso")
+                _log("agent removed")
                 await decky.emit("ps3_pairing_ended", list(self.paired_now))
 
-    # ---------- Persistenza ----------
+    # ---------- Persistence ----------
 
     async def _sync(self):
         if not os.path.exists(SYNC_SCRIPT):
@@ -235,12 +239,31 @@ class Plugin:
         return out
 
     def _install_files(self):
+        """Install script and unit, replacing @HOME@ with the user's home."""
         os.makedirs(PERSIST_DIR, exist_ok=True)
-        shutil.copyfile(os.path.join(DEFAULTS, "ps3-bt-sync.sh"), SYNC_SCRIPT)
-        os.chmod(SYNC_SCRIPT, 0o755)
-        shutil.copyfile(os.path.join(DEFAULTS, UNIT_NAME), UNIT_PATH)
+        for src, dst, mode in (
+            ("ps3-bt-sync.sh", SYNC_SCRIPT, 0o755),
+            (UNIT_NAME, UNIT_PATH, 0o644),
+        ):
+            with open(os.path.join(DEFAULTS, src)) as f:
+                text = f.read().replace("@HOME@", USER_HOME)
+            tmp = dst + ".tmp"
+            with open(tmp, "w") as f:
+                f.write(text)
+            os.chmod(tmp, mode)
+            os.replace(tmp, dst)
 
-    # ---------- API per il frontend ----------
+    async def _enable_service(self):
+        self._install_files()
+        await _run("systemctl", "daemon-reload")
+        code, out = await _run("systemctl", "enable", UNIT_NAME)
+        if code != 0:
+            _log("enable failed:", out)
+            return False
+        await self._sync()  # create the backup right away
+        return True
+
+    # ---------- API for the frontend ----------
 
     async def start_pairing(self, seconds: int = 60):
         if self.agent_task and not self.agent_task.done():
@@ -250,7 +273,7 @@ class Plugin:
         self.agent_task = asyncio.get_event_loop().create_task(self._agent_loop(int(seconds)))
         await asyncio.sleep(0.5)
         if self.agent_task.done() and self.agent_task.exception():
-            _log("avvio agente fallito:", repr(self.agent_task.exception()))
+            _log("starting the agent failed:", repr(self.agent_task.exception()))
             return False
         return True
 
@@ -297,7 +320,7 @@ class Plugin:
         return out
 
     async def identify(self, address: str):
-        """Fa lampeggiare i LED e vibrare il pad per qualche secondo."""
+        """Blink the LEDs and rumble the pad for a few seconds."""
         paths = pad.begin_leds(address)
         if not paths:
             return False
@@ -314,15 +337,15 @@ class Plugin:
         return True
 
     async def power_off(self, address: str):
-        """Spegne il pad: il DS3 si spegne da solo quando il Deck chiude la connessione Bluetooth.
-        Col cavo collegato resta alimentato dall'USB (continua a caricare)."""
+        """Turn the pad off: a DS3 switches itself off when the host closes the
+        Bluetooth connection. With the cable plugged in it stays powered by USB."""
         for path, ifaces in (await self._objects()).items():
             d = ifaces.get("org.bluez.Device1")
             if d and d["Address"][1].upper() == address.upper():
                 if not d.get("Connected", ("b", False))[1]:
                     return False
                 await self._call(path, "org.bluez.Device1", "Disconnect")
-                _log("spento", address)
+                _log("turned off", address)
                 return True
         return False
 
@@ -334,7 +357,7 @@ class Plugin:
                     if await self.power_off(d["address"]):
                         n += 1
                 except Exception as e:
-                    _log("spegnimento fallito:", d["address"], repr(e))
+                    _log("turning off failed:", d["address"], repr(e))
         return n
 
     async def rumble(self, address: str):
@@ -377,7 +400,7 @@ class Plugin:
         return bool(enabled)
 
     async def remove_device(self, adapter: str, address: str):
-        # Rimuove da BlueZ (se presente) e dal backup.
+        # Remove from BlueZ (if present) and from the backup.
         try:
             objs = await self._objects()
             for path, ifaces in objs.items():
@@ -396,14 +419,13 @@ class Plugin:
         return code == 0
 
     async def set_persist(self, enabled: bool):
+        """Called from the toggle: the user's choice is remembered and respected."""
+        s = _load_settings()
+        s["persist_choice"] = "on" if enabled else "off"
+        _save_settings(s)
         if enabled:
-            self._install_files()
-            await _run("systemctl", "daemon-reload")
-            code, out = await _run("systemctl", "enable", UNIT_NAME)
-            if code != 0:
-                _log("enable fallito:", out)
+            if not await self._enable_service():
                 return False
-            await self._sync()  # crea subito il backup
         else:
             await _run("systemctl", "disable", UNIT_NAME)
             try:
@@ -414,33 +436,40 @@ class Plugin:
         return await self.get_persist()
 
     async def restore_now(self):
-        """Ripristina dal backup e, se è cambiato qualcosa, riavvia il Bluetooth."""
+        """Restore from the backup and restart Bluetooth if something changed."""
         out = await self._sync()
-        restored = [l.split()[-1] for l in out.splitlines() if l.startswith("ripristinato")]
+        restored = [l.split()[-1] for l in out.splitlines() if l.startswith("restored")]
         if restored:
             await _run("systemctl", "restart", "bluetooth.service")
-            # il router D-Bus resta valido, ma l'agente eventualmente attivo va rifatto
         return restored
 
-    # ---------- Ciclo di vita ----------
+    # ---------- Lifecycle ----------
 
     async def _main(self):
-        _log("PS3 Pair avviato")
+        _log("PS3 Pair started")
         self.watcher = pad.ComboWatcher(_log)
         self.watcher.enabled = await self.get_combo()
         self.watcher.start()
         self.charge = pad.ChargeMonitor(_log)
         self.charge.enabled = await self.get_charge_leds()
         self.charge.start()
-        # Se la persistenza è attiva, allinea subito il backup.
+
+        s = _load_settings()
         if await self.get_persist():
-            # aggiorna lo script con la versione del plugin (può essere più recente)
+            # Refresh script and unit with this plugin version, then the backup.
             try:
                 self._install_files()
                 await _run("systemctl", "daemon-reload")
             except Exception as e:
-                _log("aggiornamento file:", repr(e))
+                _log("updating files:", repr(e))
             await self._sync()
+        elif "persist_choice" not in s:
+            # First start: remembering controllers across updates is the main
+            # feature, so it is on by default until the user turns it off.
+            _log("first start: enabling", UNIT_NAME)
+            if await self._enable_service():
+                s["persist_choice"] = "auto"
+                _save_settings(s)
 
     async def _unload(self):
         await self.stop_pairing()

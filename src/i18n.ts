@@ -1,4 +1,4 @@
-// Testi dell'interfaccia: italiano se Steam è in italiano, altrimenti inglese.
+// UI strings: Italian when Steam is in Italian, English otherwise.
 
 const it = {
   player: (n: number) => `PS3 · giocatore ${n}`,
@@ -40,6 +40,26 @@ const it = {
   secOptions: "Opzioni",
   combo: "Batteria con SELECT + START",
   comboDesc: "Tieni premuti SELECT e START per 1,5 s: i LED del pad mostrano la carica (1–4).",
+  guide: "Guida: prima connessione e LED",
+  guideFirstTitle: "Prima connessione di un nuovo PS3",
+  guideFirstSteps: [
+    "Accendi il Bluetooth del Deck.",
+    "Collega il PS3 al Deck con un cavo USB. In Modalità Gioco di solito Steam lo autorizza da solo; se il pad non si collega, premi «Accoppia PS3» e ricollegalo entro 60 secondi.",
+    "Aspetta qualche secondo, stacca il cavo e premi il tasto PS: il pad si collega via Bluetooth.",
+    "Da qui in poi basta premere PS, anche dopo gli aggiornamenti di SteamOS (con «Ricorda i PS3» attivo).",
+  ],
+  guideFirstNote: "Il cavo serve una sola volta. Un DS3 ricorda un solo dispositivo: se lo colleghi via cavo a una PS3 o a un altro PC, sul Deck andrà ricollegato col cavo.",
+  guideLedsTitle: "Cosa indicano i LED",
+  guideLeds: [
+    ["▮▯▯▯ fisso", "numero del giocatore (1–4)"],
+    ["spenti → barra che sale → 2 lampeggi → fissa", "batteria dopo SELECT + START: 1 LED fino al 25%, 2 fino al 50%, 3 fino al 75%, 4 fino al 100%"],
+    ["LED 1 lampeggia", "batteria sotto il 25%"],
+    ["barra che si riempie in loop (col cavo)", "in carica: il primo giro va da 0 a 4, poi riparte dall'ultimo livello noto"],
+    ["▮▮▮▮ fissi (col cavo)", "carica completa"],
+    ["lampeggio alternato veloce + vibrazione", "«Identifica» dal plugin"],
+    ["4 LED che lampeggiano insieme, pad non collegato", "il pad cerca il Deck: premi di nuovo PS o ricollegalo col cavo"],
+  ] as [string, string][],
+  guideLedsNote: "In carica il DS3 non comunica il livello: la barra vuol dire solo «sta caricando». Il livello va a scatti di 25% e per un minuto dopo aver staccato il cavo può oscillare.",
   batteryInfo: "Info batteria",
   close: "Chiudi",
   hm: (h: number, m: number) => (h ? `${h} h ${m} min` : `${m} min`),
@@ -94,6 +114,26 @@ const en: typeof it = {
   secOptions: "Options",
   combo: "Battery with SELECT + START",
   comboDesc: "Hold SELECT and START for 1.5 s: the pad LEDs show the charge (1–4).",
+  guide: "Guide: first connection and LEDs",
+  guideFirstTitle: "First connection of a new PS3",
+  guideFirstSteps: [
+    "Turn the Deck's Bluetooth on.",
+    "Plug the PS3 into the Deck with a USB cable. In Game Mode Steam usually authorizes it on its own; if the pad does not connect, press “Pair PS3” and plug it in again within 60 seconds.",
+    "Wait a few seconds, unplug the cable and press the PS button: the pad connects over Bluetooth.",
+    "From now on just press PS, even after SteamOS updates (with “Remember PS3 controllers” on).",
+  ],
+  guideFirstNote: "The cable is needed only once. A DS3 remembers a single host: if you plug it into a PS3 or another PC, it will need the cable on the Deck again.",
+  guideLedsTitle: "What the LEDs mean",
+  guideLeds: [
+    ["▮▯▯▯ steady", "player number (1–4)"],
+    ["off → bar fills → 2 blinks → steady", "battery after SELECT + START: 1 LED up to 25%, 2 up to 50%, 3 up to 75%, 4 up to 100%"],
+    ["LED 1 blinking", "battery below 25%"],
+    ["bar filling in a loop (cable in)", "charging: the first round goes 0 to 4, then it starts from the last known level"],
+    ["▮▮▮▮ steady (cable in)", "fully charged"],
+    ["fast alternating blink + rumble", "“Identify” from the plugin"],
+    ["all 4 blinking together, pad not connected", "the pad is looking for the Deck: press PS again or plug the cable in"],
+  ] as [string, string][],
+  guideLedsNote: "While charging the DS3 does not report its level: the bar only means “charging”. The level has 25% steps and may bounce for a minute after unplugging.",
   batteryInfo: "Battery info",
   close: "Close",
   hm: (h, m) => (h ? `${h} h ${m} min` : `${m} min`),
@@ -114,7 +154,7 @@ function steamLanguage(): string {
     const loc = w.LocalizationManager?.m_rgLocalesToUse?.[0];
     if (typeof loc === "string" && loc) return loc.toLowerCase();
   } catch {
-    /* ignora */
+    /* ignore */
   }
   return (navigator.language || "en").toLowerCase();
 }
@@ -127,9 +167,9 @@ export async function initLanguage() {
     const s = await (window as any).SteamClient?.Settings?.GetCurrentLanguage?.();
     if (typeof s === "string" && s) lang = s.toLowerCase();
   } catch {
-    /* ignora */
+    /* ignore */
   }
-  t = lang.startsWith("it") ? it : en; // "italian" (Steam) o "it-IT" (browser)
+  t = lang.startsWith("it") ? it : en; // "italian" (Steam) or "it-IT" (browser)
 }
 
 initLanguage();
