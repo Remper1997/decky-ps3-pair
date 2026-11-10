@@ -1,6 +1,6 @@
 {
   "name": "decky-ps3-pair",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Use PS3 (DualShock 3) controllers on the Steam Deck: keep pairings across SteamOS updates, LEDs, battery, rumble",
   "type": "module",
   "scripts": {
