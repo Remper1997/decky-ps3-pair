@@ -3,6 +3,11 @@
 A [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin for using **DualShock 3** (PS3) controllers on the Steam Deck.
 The interface follows the Steam language (English and Italian).
 
+<p>
+  <img src="docs/screenshots/menu-1.png" alt="PS3 Pair menu: pairing, guide, restore across updates, options" width="290">
+  <img src="docs/screenshots/menu-2.png" alt="PS3 Pair menu: controller list with player number and battery" width="290">
+</p>
+
 ## Features
 
 - **Remember PS3 controllers across SteamOS updates.** A DS3 pairs over the cable and BlueZ stores no link key for it, so the A/B partition switch of a SteamOS update loses the pad's entry. A systemd service keeps a backup of those entries in `/home` and restores them at boot, before Bluetooth starts. It is enabled on the plugin's first start and can be turned off from the menu.
