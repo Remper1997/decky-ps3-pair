@@ -6,6 +6,6 @@
   "publish": {
     "tags": ["bluetooth", "controller", "root"],
     "description": "Pair PS3 controllers by cable in Game Mode and keep them paired across SteamOS updates.",
-    "image": "https://raw.githubusercontent.com/Remper1997/decky-ps3-pair/f809313b964c243afc77a632eedd196fd721d082/docs/screenshots/menu-2.png"
+    "image": "https://raw.githubusercontent.com/Remper1997/decky-ps3-pair/48147c65e5b464e6d86c2e7bc800b1272abc306f/docs/screenshots/menu-2.png"
   }
 }
