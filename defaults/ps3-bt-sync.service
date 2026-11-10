@@ -1,0 +1,11 @@
+[Unit]
+Description=Ripristina pairing controller PS3 dopo aggiornamenti SteamOS
+Before=bluetooth.service
+RequiresMountsFor=/home /var/lib/bluetooth
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /home/deck/.local/share/ps3-bt/ps3-bt-sync.sh
+
+[Install]
+WantedBy=bluetooth.service

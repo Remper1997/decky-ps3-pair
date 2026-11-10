@@ -1,0 +1,11 @@
+{
+  "name": "PS3 Pair",
+  "author": "deck",
+  "flags": ["root"],
+  "api_version": 1,
+  "publish": {
+    "tags": ["bluetooth", "controller"],
+    "description": "Accoppia i controller PS3 via cavo in Modalità Gioco e ricordali tra gli aggiornamenti di SteamOS.",
+    "image": ""
+  }
+}
