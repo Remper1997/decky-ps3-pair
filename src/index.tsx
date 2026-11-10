@@ -1,16 +1,24 @@
 import {
   ButtonItem,
   ConfirmModal,
+  DialogButton,
+  Focusable,
+  ModalRoot,
+  TextField,
   Field,
+  Menu,
+  MenuItem,
   PanelSection,
   PanelSectionRow,
   ToggleField,
+  showContextMenu,
   showModal,
   staticClasses,
 } from "@decky/ui";
 import { addEventListener, callable, definePlugin, removeEventListener, toaster } from "@decky/api";
 import { useCallback, useEffect, useState } from "react";
 import { FaPlaystation } from "react-icons/fa";
+import { initLanguage, t } from "./i18n";
 
 type Device = {
   adapter: string;
@@ -19,6 +27,9 @@ type Device = {
   registered: boolean;
   saved: boolean;
   connected: boolean;
+  player: number | null;
+  battery: { capacity: number; status: string } | null;
+  alias: string;
 };
 
 const PAIR_SECONDS = 60;
@@ -31,11 +42,59 @@ const removeDevice = callable<[adapter: string, address: string], boolean>("remo
 const getPersist = callable<[], boolean>("get_persist");
 const setPersist = callable<[enabled: boolean], boolean>("set_persist");
 const restoreNow = callable<[], string[]>("restore_now");
+const identify = callable<[address: string], boolean>("identify");
+const rumble = callable<[address: string], boolean>("rumble");
+const showBattery = callable<[address: string], boolean>("show_battery");
+const setName = callable<[address: string, name: string], boolean>("set_name");
+const getCombo = callable<[], boolean>("get_combo");
+const setCombo = callable<[enabled: boolean], boolean>("set_combo");
+const getChargeLeds = callable<[], boolean>("get_charge_leds");
+const setChargeLeds = callable<[enabled: boolean], boolean>("set_charge_leds");
+
+function title(d: Device): string {
+  const base = d.player ? t.player(d.player) : "PS3";
+  return d.alias ? `${d.alias} · ${base.replace("PS3 · ", "")}` : base;
+}
+
+function batteryText(d: Device): string {
+  if (!d.battery) return "";
+  const b = t.battery(d.battery.capacity);
+  return d.battery.status === "Charging" ? `${b} (${t.charging})` : b;
+}
+
+function RenameModal({ d, closeModal, onDone }: { d: Device; closeModal?: () => void; onDone: () => void }) {
+  const [name, setNameState] = useState(d.alias);
+  const save = async () => {
+    await setName(d.address, name);
+    closeModal?.();
+    onDone();
+  };
+  return (
+    <ModalRoot closeModal={closeModal}>
+      <div className={staticClasses.Title} style={{ marginBottom: 12 }}>
+        {t.renameTitle}
+      </div>
+      <TextField
+        label={d.address}
+        description={t.renameHint}
+        value={name}
+        onChange={(e) => setNameState(e.target.value)}
+      />
+      <Focusable style={{ display: "flex", gap: 8, marginTop: 16 }} flow-children="horizontal">
+        <DialogButton onClick={() => closeModal?.()}>{t.cancel}</DialogButton>
+        <DialogButton onClick={save}>{t.save}</DialogButton>
+      </Focusable>
+    </ModalRoot>
+  );
+}
 
 function status(d: Device): string {
-  if (d.connected) return "Connesso";
-  if (!d.registered && d.saved) return "Solo nel backup — usa «Ripristina ora»";
-  return d.saved ? "Registrato · salvato" : "Registrato · non salvato";
+  if (d.connected) {
+    const b = batteryText(d);
+    return b ? `${t.connected(d.address)} · ${b}` : t.connected(d.address);
+  }
+  if (!d.registered && d.saved) return t.onlyBackup;
+  return `${d.saved ? t.offSaved : t.offNotSaved} · ${d.address}`;
 }
 
 function Content() {
@@ -43,6 +102,8 @@ function Content() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [persist, setPersistState] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [combo, setComboState] = useState(true);
+  const [chargeLeds, setChargeLedsState] = useState(true);
 
   const refresh = useCallback(async () => {
     setDevices(await listDevices());
@@ -52,6 +113,8 @@ function Content() {
   useEffect(() => {
     refresh();
     getPersist().then(setPersistState);
+    getCombo().then(setComboState);
+    getChargeLeds().then(setChargeLedsState);
     const t = setInterval(refresh, 2000);
     return () => clearInterval(t);
   }, [refresh]);
@@ -64,7 +127,7 @@ function Content() {
     }
     const ok = await startPairing(PAIR_SECONDS);
     if (!ok) {
-      toaster.toast({ title: "PS3 Pair", body: "Impossibile attivare l'accoppiamento" });
+      toaster.toast({ title: "PS3 Pair", body: t.pairFailed });
       return;
     }
     setLeft(PAIR_SECONDS);
@@ -83,35 +146,35 @@ function Content() {
     setBusy(false);
     toaster.toast({
       title: "PS3 Pair",
-      body: r.length ? `Ripristinati ${r.length} controller, Bluetooth riavviato` : "Niente da ripristinare",
+      body: r.length ? t.restored(r.length) : t.nothingToRestore,
     });
     refresh();
   };
 
   return (
     <>
-      <PanelSection title="Accoppiamento">
+      <PanelSection title={t.secPairing}>
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={onPair}>
-            {left > 0 ? `In attesa del cavo… ${left}s (annulla)` : "Accoppia PS3"}
+            {left > 0 ? t.waiting(left) : t.pairButton}
           </ButtonItem>
         </PanelSectionRow>
         {left > 0 && (
           <PanelSectionRow>
             <Field
-              label="Collega ora il DS3 con il cavo USB"
-              description="Quando la luce lampeggia staccalo e premi il tasto PS."
+              label={t.plugNow}
+              description={t.plugNowDesc}
               bottomSeparator="none"
             />
           </PanelSectionRow>
         )}
       </PanelSection>
 
-      <PanelSection title="Aggiornamenti SteamOS">
+      <PanelSection title={t.secUpdates}>
         <PanelSectionRow>
           <ToggleField
-            label="Ricorda i PS3 tra gli aggiornamenti"
-            description="Salva i pairing in /home e li ripristina all'avvio."
+            label={t.persist}
+            description={t.persistDesc}
             checked={persist}
             disabled={busy}
             onChange={onPersist}
@@ -120,40 +183,88 @@ function Content() {
         {persist && (
           <PanelSectionRow>
             <ButtonItem layout="below" disabled={busy} onClick={onRestore}>
-              Ripristina ora
+              {t.restoreNow}
             </ButtonItem>
           </PanelSectionRow>
         )}
       </PanelSection>
 
-      <PanelSection title="Controller PS3">
+      <PanelSection title={t.secOptions}>
+        <PanelSectionRow>
+          <ToggleField
+            label={t.combo}
+            description={t.comboDesc}
+            checked={combo}
+            onChange={async (v: boolean) => setComboState(await setCombo(v))}
+          />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ToggleField
+            label={t.chargeLeds}
+            description={t.chargeLedsDesc}
+            checked={chargeLeds}
+            onChange={async (v: boolean) => setChargeLedsState(await setChargeLeds(v))}
+          />
+        </PanelSectionRow>
+      </PanelSection>
+
+      <PanelSection title={t.secControllers}>
         {devices.length === 0 && (
           <PanelSectionRow>
-            <Field label="Nessun controller registrato" bottomSeparator="none" />
+            <Field label={t.noControllers} bottomSeparator="none" />
           </PanelSectionRow>
         )}
         {devices.map((d) => (
           <PanelSectionRow key={d.adapter + d.address}>
             <ButtonItem
               layout="below"
-              label={d.address}
+              label={title(d)}
               description={status(d)}
-              onClick={() =>
-                showModal(
-                  <ConfirmModal
-                    strTitle="Rimuovere il controller?"
-                    strDescription={`${d.address} andrà riaccoppiato con il cavo.`}
-                    strOKButtonText="Rimuovi"
-                    onOK={async () => {
-                      await removeDevice(d.adapter, d.address);
-                      toaster.toast({ title: "PS3 Pair", body: `${d.address} rimosso` });
-                      refresh();
-                    }}
-                  />,
+              onClick={(e: MouseEvent) =>
+                showContextMenu(
+                  <Menu label={title(d)}>
+                    {d.connected && (
+                      <MenuItem
+                        onSelected={async () => {
+                          if (!(await identify(d.address)))
+                            toaster.toast({ title: "PS3 Pair", body: t.ledUnreachable });
+                        }}
+                      >
+                        {t.identify}
+                      </MenuItem>
+                    )}
+                    {d.connected && <MenuItem onSelected={() => rumble(d.address)}>{t.rumble}</MenuItem>}
+                    {d.connected && d.battery && (
+                      <MenuItem onSelected={() => showBattery(d.address)}>{t.showBattery}</MenuItem>
+                    )}
+                    <MenuItem onSelected={() => showModal(<RenameModal d={d} onDone={refresh} />)}>
+                      {t.rename}
+                    </MenuItem>
+                    <MenuItem
+                      tone="destructive"
+                      onSelected={() =>
+                        showModal(
+                          <ConfirmModal
+                            strTitle={t.removeTitle}
+                            strDescription={t.removeDesc(d.address)}
+                            strOKButtonText={t.remove}
+                            onOK={async () => {
+                              await removeDevice(d.adapter, d.address);
+                              toaster.toast({ title: "PS3 Pair", body: t.removed(d.address) });
+                              refresh();
+                            }}
+                          />,
+                        )
+                      }
+                    >
+                      {t.remove}
+                    </MenuItem>
+                  </Menu>,
+                  e.currentTarget ?? window,
                 )
               }
             >
-              Rimuovi
+              {t.options}
             </ButtonItem>
           </PanelSectionRow>
         ))}
@@ -163,8 +274,9 @@ function Content() {
 }
 
 export default definePlugin(() => {
+  initLanguage();
   const onPaired = (addr: string) =>
-    toaster.toast({ title: "PS3 Pair", body: `Controller ${addr} accoppiato: staccalo e premi PS` });
+    toaster.toast({ title: "PS3 Pair", body: t.paired(addr) });
   addEventListener<[string]>("ps3_paired", onPaired);
 
   return {

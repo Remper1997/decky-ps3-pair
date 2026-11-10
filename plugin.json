@@ -5,7 +5,7 @@
   "api_version": 1,
   "publish": {
     "tags": ["bluetooth", "controller"],
-    "description": "Accoppia i controller PS3 via cavo in Modalità Gioco e ricordali tra gli aggiornamenti di SteamOS.",
+    "description": "Pair PS3 controllers by cable in Game Mode and keep them paired across SteamOS updates.",
     "image": ""
   }
 }

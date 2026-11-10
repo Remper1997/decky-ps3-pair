@@ -12,13 +12,16 @@ controller Sony e poi si deregistra (BlueZ torna all'agente precedente).
 
 import asyncio
 import glob
+import json
 import os
 import shutil
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "py_modules"))
+sys.path.insert(0, os.path.dirname(__file__))
 
 import decky  # noqa: E402
+import pad  # noqa: E402
 from jeepney import DBusAddress, MatchRule, Properties, new_method_call  # noqa: E402
 from jeepney.io.asyncio import open_dbus_router  # noqa: E402
 from jeepney.low_level import HeaderFields  # noqa: E402
@@ -36,6 +39,27 @@ SYNC_SCRIPT = os.path.join(PERSIST_DIR, "ps3-bt-sync.sh")
 UNIT_NAME = "ps3-bt-sync.service"
 UNIT_PATH = "/etc/systemd/system/" + UNIT_NAME
 DEFAULTS = os.path.join(os.path.dirname(__file__), "defaults")
+SETTINGS = os.path.join(PERSIST_DIR, "settings.json")
+
+
+def _load_settings():
+    try:
+        with open(SETTINGS) as f:
+            d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
+def _save_settings(d):
+    os.makedirs(PERSIST_DIR, exist_ok=True)
+    tmp = SETTINGS + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(d, f, indent=1, ensure_ascii=False)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, SETTINGS)
 
 
 def _log(*a):
@@ -94,6 +118,8 @@ class Plugin:
     agent_task = None
     pairing_until = 0.0
     paired_now = []
+    watcher = None
+    charge = None
 
     # ---------- D-Bus ----------
 
@@ -136,16 +162,31 @@ class Plugin:
                 _log("autorizzo controller Sony", addr, ma, uuid)
                 await r.send(new_method_return(msg))
                 self.paired_now.append(addr)
-                asyncio.get_event_loop().create_task(self._after_pair(addr))
+                asyncio.get_event_loop().create_task(self._after_pair(addr, dev_path))
                 return
             _log("rifiuto AuthorizeService non Sony", addr, ma)
         else:
             _log("rifiuto richiesta agente", member)
         await r.send(new_error(msg, "org.bluez.Error.Rejected"))
 
-    async def _after_pair(self, addr):
+    async def _set_trusted(self, dev_path):
+        r = await self._bus()
+        msg = Properties(DBusAddress(dev_path, bus_name=BLUEZ, interface="org.bluez.Device1")).set(
+            "Trusted", "b", True
+        )
+        unwrap_msg(await r.send_and_get_reply(msg))
+
+    async def _after_pair(self, addr, dev_path):
+        # Come fa KDE: marca il pad come fidato, così le riconnessioni via
+        # Bluetooth non richiedono un'altra autorizzazione all'agente.
+        await asyncio.sleep(1)
+        try:
+            await self._set_trusted(dev_path)
+            _log("impostato Trusted", addr)
+        except Exception as e:
+            _log("Trusted fallito:", addr, repr(e))
         # Lascia a BlueZ il tempo di scrivere il file info, poi aggiorna il backup.
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
         if await self.get_persist():
             await self._sync()
         await decky.emit("ps3_paired", addr)
@@ -234,6 +275,7 @@ class Plugin:
                     connected[d["Address"][1].upper()] = bool(d.get("Connected", ("b", False))[1])
         except Exception as e:
             _log("GetManagedObjects:", repr(e))
+        names = _load_settings().get("names", {})
         out = []
         for key in sorted(set(cable) | set(backup)):
             ad, dev = key
@@ -245,8 +287,68 @@ class Plugin:
                 "registered": key in cable,
                 "saved": key in backup,
                 "connected": connected.get(dev.upper(), False),
+                "player": pad.player_number(dev) if connected.get(dev.upper(), False) else None,
+                "battery": pad.battery(dev) if connected.get(dev.upper(), False) else None,
+                "alias": names.get(dev.upper(), ""),
             })
+        out.sort(key=lambda d: (d["player"] is None, d["player"] or 0, d["address"]))
         return out
+
+    async def identify(self, address: str):
+        """Fa lampeggiare i LED e vibrare il pad per qualche secondo."""
+        paths = pad.begin_leds(address)
+        if not paths:
+            return False
+
+        async def blink():
+            for i in range(12):
+                pad.write_leds(paths, [1 if (i + j) % 2 == 0 else 0 for j in range(4)])
+                await asyncio.sleep(0.25)
+
+        try:
+            await asyncio.gather(blink(), pad.rumble(address, ms=500))
+        finally:
+            pad.end_leds(address, paths)
+        return True
+
+    async def rumble(self, address: str):
+        return await pad.rumble(address)
+
+    async def show_battery(self, address: str):
+        return await pad.show_battery(address)
+
+    async def set_name(self, address: str, name: str):
+        s = _load_settings()
+        names = s.setdefault("names", {})
+        name = (name or "").strip()[:40]
+        if name:
+            names[address.upper()] = name
+        else:
+            names.pop(address.upper(), None)
+        _save_settings(s)
+        return True
+
+    async def get_charge_leds(self):
+        return bool(_load_settings().get("charge_leds", True))
+
+    async def set_charge_leds(self, enabled: bool):
+        s = _load_settings()
+        s["charge_leds"] = bool(enabled)
+        _save_settings(s)
+        if self.charge:
+            self.charge.enabled = bool(enabled)
+        return bool(enabled)
+
+    async def get_combo(self):
+        return bool(_load_settings().get("battery_combo", True))
+
+    async def set_combo(self, enabled: bool):
+        s = _load_settings()
+        s["battery_combo"] = bool(enabled)
+        _save_settings(s)
+        if self.watcher:
+            self.watcher.enabled = bool(enabled)
+        return bool(enabled)
 
     async def remove_device(self, adapter: str, address: str):
         # Rimuove da BlueZ (se presente) e dal backup.
@@ -298,6 +400,12 @@ class Plugin:
 
     async def _main(self):
         _log("PS3 Pair avviato")
+        self.watcher = pad.ComboWatcher(_log)
+        self.watcher.enabled = await self.get_combo()
+        self.watcher.start()
+        self.charge = pad.ChargeMonitor(_log)
+        self.charge.enabled = await self.get_charge_leds()
+        self.charge.start()
         # Se la persistenza è attiva, allinea subito il backup.
         if await self.get_persist():
             # aggiorna lo script con la versione del plugin (può essere più recente)
@@ -310,6 +418,11 @@ class Plugin:
 
     async def _unload(self):
         await self.stop_pairing()
+        if self.watcher:
+            self.watcher.stop()
+        if self.charge:
+            self.charge.stop()
+        pad.restore_all()
         if self._router_cm is not None:
             try:
                 await self._router_cm.__aexit__(None, None, None)
