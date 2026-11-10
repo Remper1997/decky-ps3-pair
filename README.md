@@ -4,8 +4,8 @@ A [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin for u
 The interface follows the Steam language (English and Italian).
 
 <p>
-  <img src="docs/screenshots/menu-1.png" alt="PS3 Pair menu: pairing, guide, restore across updates, options" width="290">
-  <img src="docs/screenshots/menu-2.png" alt="PS3 Pair menu: controller list with player number and battery" width="290">
+  <img src="docs/screenshots/menu-1.png" alt="PS3 Pair menu: pairing, guide, restore across updates, options" width="270">
+  <img src="docs/screenshots/menu-2.png" alt="PS3 Pair menu: controller list with player number and battery" width="270">
 </p>
 
 ## Features
@@ -38,6 +38,24 @@ A DS3 cannot be discovered over Bluetooth: it only connects to the address store
 4. From now on, just press **PS**. With "Remember PS3 controllers across updates" on, this survives SteamOS updates too.
 
 Note: a DS3 remembers a single host. Plugging it into a PS3 console or another PC pairs it there, and it will need the cable on the Deck again.
+
+## Controller options
+
+Each PS3 in the list has an **Options** menu:
+
+<img src="docs/screenshots/options.png" alt="Options menu of a PS3 controller" width="290">
+
+| Option | What it does |
+|---|---|
+| **Identify** | blinks the pad's LEDs and rumbles it, to find which pad is which (connected pads only) |
+| **Rumble** | short rumble (connected pads only) |
+| **Turn off** | turns the pad off by closing its Bluetooth connection; with the cable plugged in it keeps charging |
+| **Show battery on LEDs** | same as holding SELECT + START on the pad |
+| **Battery info** | usage time since the last full charge and for the previous cycle |
+| **Rename** | gives the pad a custom name shown in the list (leave empty for the default) |
+| **Remove** | removes the pad from Bluetooth and from the backup; it will need the cable again |
+
+Other buttons: **Turn off all PS3 controllers** above the list, and **Restore now** under "Remember PS3 controllers across updates", which restores missing pads from the backup and restarts Bluetooth: other Bluetooth devices reconnect a moment later, and in Desktop Mode KDE may stop answering Bluetooth requests until the next reboot.
 
 ## What the LEDs mean
 
