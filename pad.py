@@ -30,6 +30,7 @@ BUSY = set()  # pads whose LEDs are used by an animation right now
 ORIGINAL = {}  # pad HID dir -> player LEDs seen before any of our animations
 STATE_FILE = None  # set by main.py: battery level and statistics of each pad
 SETTLE = 60.0  # seconds after unplugging during which readings are ignored (bounce)
+MIN_CYCLE = 3600  # cycles shorter than this (seconds of use) are not archived
 _state = None  # addr -> {"level", "full_at", "use_s", "last_cycle"}
 _runtime = {}  # addr -> {"prev", "settle_until", "last_t", "charged"}
 _saved_at = 0.0
@@ -270,12 +271,15 @@ def track(addr, b):
     if status in ("Charging", "Full"):
         if rt["prev"] not in ("Charging", "Full"):
             if st.get("full_at"):
-                st["last_cycle"] = {
-                    "use_s": int(st.get("use_s", 0)),
-                    "to_level": st.get("level"),
-                    "full_at": st["full_at"],
-                    "ended": int(time.time()),
-                }
+                # a short cycle (e.g. unplugged and plugged back in) says nothing
+                # about the battery: keep the previous archived cycle instead
+                if st.get("use_s", 0) >= MIN_CYCLE:
+                    st["last_cycle"] = {
+                        "use_s": int(st.get("use_s", 0)),
+                        "to_level": st.get("level"),
+                        "full_at": st["full_at"],
+                        "ended": int(time.time()),
+                    }
                 st["full_at"] = None
                 st["use_s"] = 0
                 save_state()
@@ -297,10 +301,13 @@ def track(addr, b):
 
 def battery_stats(addr):
     st = _load_state().get(addr.upper(), {})
+    last = st.get("last_cycle")
+    if last and last.get("use_s", 0) < MIN_CYCLE:
+        last = None  # archived by an older version, too short to be meaningful
     return {
         "full_at": st.get("full_at"),
         "use_s": int(st.get("use_s", 0)) if st.get("full_at") else None,
-        "last_cycle": st.get("last_cycle"),
+        "last_cycle": last,
     }
 
 
