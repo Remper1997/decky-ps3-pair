@@ -75,7 +75,12 @@ sudo python3 -I cli.py battery AA:BB:CC:DD:EE:FF
 
 If the plugin is uninstalled, the service notices at the next boot and disables itself; the backup is kept.
 
-## Licenses
+## License
 
-Plugin code: BSD 3-Clause (see `LICENSE`).
+Copyright (C) 2026 Remper97
+
+PS3 Pair is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. It is distributed WITHOUT ANY WARRANTY. See `LICENSE` for the full text.
+
+Versions up to 1.2.0 were released under the BSD 3-Clause license.
+
 Bundles [jeepney](https://gitlab.com/takluyver/jeepney) 0.9.0 in `py_modules/` (MIT license, `py_modules/jeepney-0.9.0.dist-info/licenses/`).
