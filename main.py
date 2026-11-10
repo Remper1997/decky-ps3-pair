@@ -40,6 +40,7 @@ UNIT_NAME = "ps3-bt-sync.service"
 UNIT_PATH = "/etc/systemd/system/" + UNIT_NAME
 DEFAULTS = os.path.join(os.path.dirname(__file__), "defaults")
 SETTINGS = os.path.join(PERSIST_DIR, "settings.json")
+pad.STATE_FILE = os.path.join(PERSIST_DIR, "battery.json")
 
 
 def _load_settings():
@@ -290,6 +291,7 @@ class Plugin:
                 "player": pad.player_number(dev) if connected.get(dev.upper(), False) else None,
                 "battery": pad.battery(dev) if connected.get(dev.upper(), False) else None,
                 "alias": names.get(dev.upper(), ""),
+                "stats": pad.battery_stats(dev),
             })
         out.sort(key=lambda d: (d["player"] is None, d["player"] or 0, d["address"]))
         return out
@@ -310,6 +312,30 @@ class Plugin:
         finally:
             pad.end_leds(address, paths)
         return True
+
+    async def power_off(self, address: str):
+        """Spegne il pad: il DS3 si spegne da solo quando il Deck chiude la connessione Bluetooth.
+        Col cavo collegato resta alimentato dall'USB (continua a caricare)."""
+        for path, ifaces in (await self._objects()).items():
+            d = ifaces.get("org.bluez.Device1")
+            if d and d["Address"][1].upper() == address.upper():
+                if not d.get("Connected", ("b", False))[1]:
+                    return False
+                await self._call(path, "org.bluez.Device1", "Disconnect")
+                _log("spento", address)
+                return True
+        return False
+
+    async def power_off_all(self):
+        n = 0
+        for d in await self.list_devices():
+            if d["connected"]:
+                try:
+                    if await self.power_off(d["address"]):
+                        n += 1
+                except Exception as e:
+                    _log("spegnimento fallito:", d["address"], repr(e))
+        return n
 
     async def rumble(self, address: str):
         return await pad.rumble(address)

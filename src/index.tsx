@@ -30,6 +30,11 @@ type Device = {
   player: number | null;
   battery: { capacity: number; status: string } | null;
   alias: string;
+  stats: {
+    full_at: number | null;
+    use_s: number | null;
+    last_cycle: { use_s: number; to_level: number | null; full_at: number; ended: number } | null;
+  };
 };
 
 const PAIR_SECONDS = 60;
@@ -44,6 +49,8 @@ const setPersist = callable<[enabled: boolean], boolean>("set_persist");
 const restoreNow = callable<[], string[]>("restore_now");
 const identify = callable<[address: string], boolean>("identify");
 const rumble = callable<[address: string], boolean>("rumble");
+const powerOff = callable<[address: string], boolean>("power_off");
+const powerOffAll = callable<[], number>("power_off_all");
 const showBattery = callable<[address: string], boolean>("show_battery");
 const setName = callable<[address: string, name: string], boolean>("set_name");
 const getCombo = callable<[], boolean>("get_combo");
@@ -60,6 +67,31 @@ function batteryText(d: Device): string {
   if (!d.battery) return "";
   const b = t.battery(d.battery.capacity);
   return d.battery.status === "Charging" ? `${b} (${t.charging})` : b;
+}
+
+function dur(sec: number): string {
+  const m = Math.floor(sec / 60);
+  return t.hm(Math.floor(m / 60), m % 60);
+}
+
+function BatteryInfoModal({ d, closeModal }: { d: Device; closeModal?: () => void }) {
+  const st = d.stats;
+  const when = (ts: number) =>
+    new Date(ts * 1000).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  const pct = (lv: number | null) => (lv ? `~${lv * 25}%` : "?");
+  return (
+    <ModalRoot closeModal={closeModal}>
+      <div className={staticClasses.Title} style={{ marginBottom: 12 }}>
+        {t.batteryInfo} · {title(d)}
+      </div>
+      <p>{st.full_at && st.use_s !== null ? t.cycleNow(when(st.full_at), dur(st.use_s)) : t.cycleNone}</p>
+      {st.last_cycle && <p>{t.cycleLast(dur(st.last_cycle.use_s), pct(st.last_cycle.to_level))}</p>}
+      <p style={{ opacity: 0.7, fontSize: "0.9em" }}>{t.cycleNote}</p>
+      <DialogButton style={{ marginTop: 12 }} onClick={() => closeModal?.()}>
+        {t.close}
+      </DialogButton>
+    </ModalRoot>
+  );
 }
 
 function RenameModal({ d, closeModal, onDone }: { d: Device; closeModal?: () => void; onDone: () => void }) {
@@ -214,6 +246,20 @@ function Content() {
             <Field label={t.noControllers} bottomSeparator="none" />
           </PanelSectionRow>
         )}
+        {devices.some((d) => d.connected) && (
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              onClick={async () => {
+                const n = await powerOffAll();
+                toaster.toast({ title: "PS3 Pair", body: t.poweredOff(n) });
+                refresh();
+              }}
+            >
+              {t.powerOffAll}
+            </ButtonItem>
+          </PanelSectionRow>
+        )}
         {devices.map((d) => (
           <PanelSectionRow key={d.adapter + d.address}>
             <ButtonItem
@@ -234,9 +280,20 @@ function Content() {
                       </MenuItem>
                     )}
                     {d.connected && <MenuItem onSelected={() => rumble(d.address)}>{t.rumble}</MenuItem>}
+                    {d.connected && (
+                      <MenuItem
+                        onSelected={async () => {
+                          await powerOff(d.address);
+                          refresh();
+                        }}
+                      >
+                        {t.powerOff}
+                      </MenuItem>
+                    )}
                     {d.connected && d.battery && (
                       <MenuItem onSelected={() => showBattery(d.address)}>{t.showBattery}</MenuItem>
                     )}
+                    <MenuItem onSelected={() => showModal(<BatteryInfoModal d={d} />)}>{t.batteryInfo}</MenuItem>
                     <MenuItem onSelected={() => showModal(<RenameModal d={d} onDone={refresh} />)}>
                       {t.rename}
                     </MenuItem>

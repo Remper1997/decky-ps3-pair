@@ -126,6 +126,16 @@ const it = {
     secOptions: "Opzioni",
     combo: "Batteria con SELECT + START",
     comboDesc: "Tieni premuti SELECT e START per 1,5 s: i LED del pad mostrano la carica (1–4).",
+    batteryInfo: "Info batteria",
+    close: "Chiudi",
+    hm: (h, m) => (h ? `${h} h ${m} min` : `${m} min`),
+    cycleNow: (d, u) => `Dall'ultima carica completa (${d}): ${u} di utilizzo`,
+    cycleNone: "Nessuna carica completa registrata: lascia il pad col cavo finché arriva al 100%.",
+    cycleLast: (u, pct) => `Ciclo precedente: ${u} di utilizzo, da 100% a ${pct}`,
+    cycleNote: "Conta solo il tempo in cui il pad è acceso. Confronta i cicli nel tempo: se la durata cala molto, la batteria si sta consumando.",
+    powerOff: "Spegni",
+    powerOffAll: "Spegni tutti i PS3",
+    poweredOff: (n) => (n === 1 ? "1 controller spento" : `${n} controller spenti`),
     chargeLeds: "Mostra la ricarica sui LED",
     chargeLedsDesc: "Col cavo collegato: barra che si riempie in carica, 4 LED fissi quando è carico.",
 };
@@ -169,6 +179,16 @@ const en = {
     secOptions: "Options",
     combo: "Battery with SELECT + START",
     comboDesc: "Hold SELECT and START for 1.5 s: the pad LEDs show the charge (1–4).",
+    batteryInfo: "Battery info",
+    close: "Close",
+    hm: (h, m) => (h ? `${h} h ${m} min` : `${m} min`),
+    cycleNow: (d, u) => `Since the last full charge (${d}): ${u} of use`,
+    cycleNone: "No full charge recorded yet: leave the pad on the cable until it reaches 100%.",
+    cycleLast: (u, pct) => `Previous cycle: ${u} of use, from 100% to ${pct}`,
+    cycleNote: "Only time with the pad switched on is counted. Compare cycles over time: a big drop in duration means the battery is wearing out.",
+    powerOff: "Turn off",
+    powerOffAll: "Turn off all PS3 controllers",
+    poweredOff: (n) => (n === 1 ? "1 controller turned off" : `${n} controllers turned off`),
     chargeLeds: "Show charging on LEDs",
     chargeLedsDesc: "With the cable plugged in: a filling bar while charging, 4 steady LEDs when full.",
 };
@@ -210,6 +230,8 @@ const setPersist = callable("set_persist");
 const restoreNow = callable("restore_now");
 const identify = callable("identify");
 const rumble = callable("rumble");
+const powerOff = callable("power_off");
+const powerOffAll = callable("power_off_all");
 const showBattery = callable("show_battery");
 const setName = callable("set_name");
 const getCombo = callable("get_combo");
@@ -225,6 +247,24 @@ function batteryText(d) {
         return "";
     const b = t.battery(d.battery.capacity);
     return d.battery.status === "Charging" ? `${b} (${t.charging})` : b;
+}
+function dur(sec) {
+    const m = Math.floor(sec / 60);
+    return t.hm(Math.floor(m / 60), m % 60);
+}
+function BatteryInfoModal({ d, closeModal }) {
+    const st = d.stats;
+    const when = (ts) => new Date(ts * 1000).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    const pct = (lv) => (lv ? `~${lv * 25}%` : "?");
+    return (window.SP_REACT.createElement(DFL.ModalRoot, { closeModal: closeModal },
+        window.SP_REACT.createElement("div", { className: DFL.staticClasses.Title, style: { marginBottom: 12 } },
+            t.batteryInfo,
+            " \u00B7 ",
+            title(d)),
+        window.SP_REACT.createElement("p", null, st.full_at && st.use_s !== null ? t.cycleNow(when(st.full_at), dur(st.use_s)) : t.cycleNone),
+        st.last_cycle && window.SP_REACT.createElement("p", null, t.cycleLast(dur(st.last_cycle.use_s), pct(st.last_cycle.to_level))),
+        window.SP_REACT.createElement("p", { style: { opacity: 0.7, fontSize: "0.9em" } }, t.cycleNote),
+        window.SP_REACT.createElement(DFL.DialogButton, { style: { marginTop: 12 }, onClick: () => closeModal?.() }, t.close)));
 }
 function RenameModal({ d, closeModal, onDone }) {
     const [name, setNameState] = SP_REACT.useState(d.alias);
@@ -316,6 +356,12 @@ function Content() {
         window.SP_REACT.createElement(DFL.PanelSection, { title: t.secControllers },
             devices.length === 0 && (window.SP_REACT.createElement(DFL.PanelSectionRow, null,
                 window.SP_REACT.createElement(DFL.Field, { label: t.noControllers, bottomSeparator: "none" }))),
+            devices.some((d) => d.connected) && (window.SP_REACT.createElement(DFL.PanelSectionRow, null,
+                window.SP_REACT.createElement(DFL.ButtonItem, { layout: "below", onClick: async () => {
+                        const n = await powerOffAll();
+                        toaster.toast({ title: "PS3 Pair", body: t.poweredOff(n) });
+                        refresh();
+                    } }, t.powerOffAll))),
             devices.map((d) => (window.SP_REACT.createElement(DFL.PanelSectionRow, { key: d.adapter + d.address },
                 window.SP_REACT.createElement(DFL.ButtonItem, { layout: "below", label: title(d), description: status(d), onClick: (e) => DFL.showContextMenu(window.SP_REACT.createElement(DFL.Menu, { label: title(d) },
                         d.connected && (window.SP_REACT.createElement(DFL.MenuItem, { onSelected: async () => {
@@ -323,7 +369,12 @@ function Content() {
                                     toaster.toast({ title: "PS3 Pair", body: t.ledUnreachable });
                             } }, t.identify)),
                         d.connected && window.SP_REACT.createElement(DFL.MenuItem, { onSelected: () => rumble(d.address) }, t.rumble),
+                        d.connected && (window.SP_REACT.createElement(DFL.MenuItem, { onSelected: async () => {
+                                await powerOff(d.address);
+                                refresh();
+                            } }, t.powerOff)),
                         d.connected && d.battery && (window.SP_REACT.createElement(DFL.MenuItem, { onSelected: () => showBattery(d.address) }, t.showBattery)),
+                        window.SP_REACT.createElement(DFL.MenuItem, { onSelected: () => DFL.showModal(window.SP_REACT.createElement(BatteryInfoModal, { d: d })) }, t.batteryInfo),
                         window.SP_REACT.createElement(DFL.MenuItem, { onSelected: () => DFL.showModal(window.SP_REACT.createElement(RenameModal, { d: d, onDone: refresh })) }, t.rename),
                         window.SP_REACT.createElement(DFL.MenuItem, { tone: "destructive", onSelected: () => DFL.showModal(window.SP_REACT.createElement(DFL.ConfirmModal, { strTitle: t.removeTitle, strDescription: t.removeDesc(d.address), strOKButtonText: t.remove, onOK: async () => {
                                     await removeDevice(d.adapter, d.address);

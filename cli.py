@@ -115,6 +115,8 @@ async def run(cmd, arg):
             await stato(p)
         elif cmd == "identifica":
             out("identifica", arg, "->", await p.identify(arg or ""))
+        elif cmd == "spegni":
+            out("spegni", arg, "->", await p.power_off(arg or ""))
         elif cmd == "vibra":
             out("vibra", arg, "->", await p.rumble(arg or ""))
         elif cmd == "batteria":

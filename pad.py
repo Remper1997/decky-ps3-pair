@@ -9,8 +9,10 @@ Usa solo interfacce del kernel (driver hid-sony):
 import asyncio
 import fcntl
 import glob
+import json
 import os
 import struct
+import time
 
 # --- evdev ---
 EV_KEY = 0x01
@@ -25,8 +27,14 @@ INPUT_EVENT = struct.Struct("llHHi")  # timeval, type, code, value (24 byte su x
 COMBO = {BTN_SELECT, BTN_START}
 BUSY = set()  # pad su cui un'animazione sta usando i LED
 ORIGINAL = {}  # cartella HID del pad -> LED del giocatore visti prima di ogni nostra animazione
+STATE_FILE = None  # impostato da main.py: livello e statistiche batteria di ogni pad, su file
+SETTLE = 60.0  # secondi dopo il distacco del cavo in cui le letture non contano (rimbalzo)
+_state = None  # addr -> {"level", "full_at", "use_s", "last_cycle"}
+_runtime = {}  # addr -> {"prev", "settle_until", "last_t", "charged"}
+_saved_at = 0.0
 COMBO_HOLD = 1.5  # secondi
-BATTERY_SHOW = 4.0  # secondi
+BATTERY_SHOW = 4.0  # secondi (animazione di carica / batteria scarica)
+BATTERY_HOLD = 3.0  # secondi a livello fisso
 
 
 def hid_dirs(addr):
@@ -72,7 +80,59 @@ def read_leds(paths):
     return vals
 
 
+def _sixaxis_report(leds):
+    """Report di output del DS3 (come sixaxis_output_report del driver hid-sony),
+    con i 4 LED in un colpo solo e la vibrazione ferma."""
+    bitmap = 0
+    for i, v in enumerate(leds):
+        if int(v):
+            bitmap |= 1 << (i + 1)
+    led = bytes([0xFF, 0x27, 0x10, 0x00, 0x32])
+    return (
+        bytes([0x01])  # report id
+        + bytes([0x01, 0xFF, 0x00, 0xFF, 0x00])  # rumble: spenta
+        + bytes(4)
+        + bytes([bitmap])
+        + led * 4
+        + bytes(5)
+    )
+
+
+def _hidraw_for(paths):
+    """/dev/hidrawN dello stesso dispositivo HID dei LED."""
+    hid = os.path.dirname(os.path.dirname(os.path.dirname(paths[0])))
+    nodes = glob.glob(os.path.join(hid, "hidraw", "hidraw*"))
+    return "/dev/" + os.path.basename(nodes[0]) if nodes else None
+
+
+def _hidiocsoutput(length):
+    # _IOC(_IOC_READ|_IOC_WRITE, 'H', 0x0B, len)
+    return (3 << 30) | (length << 16) | (ord("H") << 8) | 0x0B
+
+
+def write_leds_atomic(paths, vals):
+    """Manda i 4 LED con un solo SET_REPORT: si accendono/spengono insieme.
+    Non cambia lo stato dei LED nel driver (sysfs), che resta il numero giocatore."""
+    node = _hidraw_for(paths) if paths else None
+    if not node:
+        return False
+    rep = bytearray(_sixaxis_report(vals))
+    try:
+        fd = os.open(node, os.O_RDWR)
+    except OSError:
+        return False
+    try:
+        fcntl.ioctl(fd, _hidiocsoutput(len(rep)), rep, True)
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+
+
 def write_leds(paths, vals):
+    if write_leds_atomic(paths, vals):
+        return
     for p, v in zip(paths, vals):
         try:
             with open(p, "w") as f:
@@ -135,6 +195,128 @@ def battery(addr):
         return None
 
 
+def _load_state():
+    global _state
+    if _state is None:
+        _state = {}
+        if STATE_FILE:
+            try:
+                with open(STATE_FILE) as f:
+                    d = json.load(f)
+                    if isinstance(d, dict):
+                        _state = d
+            except (OSError, ValueError):
+                pass
+    return _state
+
+
+def save_state(force=True):
+    global _saved_at
+    now = time.monotonic()
+    if not STATE_FILE or (not force and now - _saved_at < 60):
+        return
+    _saved_at = now
+    try:
+        tmp = STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(_load_state(), f, indent=1)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, STATE_FILE)
+    except OSError:
+        pass
+
+
+def _pad_state(addr):
+    return _load_state().setdefault(addr.upper(), {})
+
+
+def _set_level(addr, cap):
+    lv = sum(battery_leds(cap))
+    st = _pad_state(addr)
+    if lv and st.get("level") != lv:
+        st["level"] = lv
+        save_state()
+
+
+def remember_level(addr, b):
+    """Livello letto con SELECT+START: conta solo a batteria assestata."""
+    if not b or b["status"] in ("Charging", "Full"):
+        return
+    rt = _runtime.get(addr.upper(), {})
+    if time.monotonic() < rt.get("settle_until", 0):
+        return
+    _set_level(addr, b["capacity"])
+
+
+def track(addr, b):
+    """Chiamato di continuo per ogni pad collegato.
+    - ricorda l'ultimo livello a batteria assestata (SETTLE s dopo il cavo)
+    - ciclo: se dopo una carica il pad si assesta al 100% parte il conteggio
+      del tempo di utilizzo; alla carica successiva il ciclo viene archiviato."""
+    if not b:
+        return
+    now = time.monotonic()
+    key = addr.upper()
+    rt = _runtime.setdefault(key, {"prev": None, "settle_until": 0.0, "last_t": now})
+    st = _pad_state(addr)
+    dt = now - rt["last_t"]
+    rt["last_t"] = now
+    status = b["status"]
+    if status in ("Charging", "Full"):
+        if rt["prev"] not in ("Charging", "Full"):
+            if st.get("full_at"):
+                st["last_cycle"] = {
+                    "use_s": int(st.get("use_s", 0)),
+                    "to_level": st.get("level"),
+                    "full_at": st["full_at"],
+                    "ended": int(time.time()),
+                }
+                st["full_at"] = None
+                st["use_s"] = 0
+                save_state()
+        rt["charged"] = True
+    else:
+        if rt["prev"] in ("Charging", "Full"):
+            rt["settle_until"] = now + SETTLE
+        if now >= rt["settle_until"]:
+            _set_level(addr, b["capacity"])
+            if rt.pop("charged", False) and b["capacity"] >= 100:
+                st["full_at"] = int(time.time())
+                st["use_s"] = 0
+                save_state()
+        if st.get("full_at") and 0 < dt < 5:
+            st["use_s"] = st.get("use_s", 0) + dt
+            save_state(force=False)
+    rt["prev"] = status
+
+
+def battery_stats(addr):
+    st = _load_state().get(addr.upper(), {})
+    return {
+        "full_at": st.get("full_at"),
+        "use_s": int(st.get("use_s", 0)) if st.get("full_at") else None,
+        "last_cycle": st.get("last_cycle"),
+    }
+
+
+def charge_frame(addr, step):
+    """Fotogramma dell'animazione di carica.
+    Primo giro 0,1,2,3,4; dai giri successivi parte dall'ultimo livello noto
+    (es. livello 2: 2,3,4,2,3,4...). Con livello 4 alterna 3 e 4, per non
+    sembrare "carico". Senza livello noto: sempre 0..4."""
+    if step < 5:
+        n = step
+    else:
+        lv = _load_state().get(addr.upper(), {}).get("level")
+        if not lv:
+            n = step % 5
+        else:
+            start = min(lv, 3)
+            span = 4 - start + 1
+            n = start + (step - 5) % span
+    return [1 if k < n else 0 for k in range(4)]
+
+
 def battery_leds(cap):
     """Barra di LED: 1-25% -> 1 LED, ... 76-100% -> 4 LED; 0 -> nessuno."""
     n = 0 if cap <= 0 else min(4, (cap + 24) // 25)
@@ -194,27 +376,26 @@ async def show_battery(addr):
     paths = begin_leds(addr)
     if not paths:
         return False
+    remember_level(addr, b)
     level = sum(battery_leds(b["capacity"]))
     bar = lambda n: [1 if k < n else 0 for k in range(4)]
     try:
-        # intro: la barra si riempie fino a 4 LED e poi scende fino al livello di carica
-        # (in carica il livello non è noto: niente intro, parte subito l'animazione)
+        # partenza da tutti spenti, così non si confonde col LED del giocatore;
+        # poi la barra sale fino al livello (in carica il livello non è noto: si salta)
         if b["status"] != "Charging":
-            for n in (1, 2, 3, 4):
-                write_leds(paths, bar(n))
-                await asyncio.sleep(0.2)
-            await asyncio.sleep(0.5)
-            for n in range(3, max(level, 1) - 1, -1):
+            write_leds(paths, bar(0))
+            await asyncio.sleep(0.4)
+            for n in range(1, max(level, 1) + 1):
                 write_leds(paths, bar(n))
                 await asyncio.sleep(0.2)
         if b["status"] == "Charging":
             # in carica il DS3 non comunica il livello (il driver dice sempre 100%):
-            # la barra si riempie da 1 a 4, in loop
+            # la barra si riempie da 0 a 4, in loop
             end = asyncio.get_event_loop().time() + BATTERY_SHOW
-            n = 1
+            step = 0
             while asyncio.get_event_loop().time() < end:
-                write_leds(paths, bar(n))
-                n = n + 1 if n < 4 else 1
+                write_leds(paths, charge_frame(addr, step))
+                step += 1
                 await asyncio.sleep(0.6)
         elif b["capacity"] < 25:
             # quasi scarico: il primo LED lampeggia
@@ -222,8 +403,13 @@ async def show_battery(addr):
                 write_leds(paths, [1 - i % 2, 0, 0, 0])
                 await asyncio.sleep(0.25)
         else:
-            write_leds(paths, bar(level))
-            await asyncio.sleep(BATTERY_SHOW)
+            # livello raggiunto: 2 lampeggi tutti insieme, poi fisso
+            for _ in range(2):
+                write_leds(paths, bar(0))
+                await asyncio.sleep(0.25)
+                write_leds(paths, bar(level))
+                await asyncio.sleep(0.25)
+            await asyncio.sleep(BATTERY_HOLD)
     finally:
         end_leds(addr, paths)
     return True
@@ -250,6 +436,7 @@ class ChargeMonitor:
         if self.task:
             self.task.cancel()
         self.release_all()
+        save_state()
 
     def release_all(self):
         for addr in list(self.state):
@@ -275,11 +462,14 @@ class ChargeMonitor:
             if addr not in present:
                 self.state.pop(addr, None)
                 BUSY.discard(addr)
+        batteries = {addr: battery(addr) for addr in present}
+        for addr, b in batteries.items():
+            track(addr, b)
         if not self.enabled:
             self.release_all()
             return
         for addr in present:
-            b = battery(addr)
+            b = batteries[addr]
             mode = b["status"] if b and b["status"] in ("Charging", "Full") else None
             st = self.state.get(addr)
             if mode is None:
@@ -299,8 +489,7 @@ class ChargeMonitor:
             if mode == "Full":
                 write_leds(paths, [1, 1, 1, 1])
             else:
-                n = st["step"] % 4 + 1
-                write_leds(paths, [1 if k < n else 0 for k in range(4)])
+                write_leds(paths, charge_frame(addr, st["step"]))
                 st["step"] += 1
 
 
